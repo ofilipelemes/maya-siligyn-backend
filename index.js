@@ -4,23 +4,10 @@ const { OpenAI } = require('openai');
 const app = express();
 app.use(express.json());
 
-// Cliente da OpenAI (preparado para uso futuro, se quisermos)
+// Cliente da OpenAI
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
-
-// Prompt base da MAYA (não está sendo usado por enquanto, fluxo é 100% controlado)
-const SYSTEM_PROMPT = `
-Você é MAYA da Siligyn, agente oficial de atendimento da Siligyn Produtos Médicos.
-
-- Fale sempre em português do Brasil.
-- Seja acolhedora, clara, objetiva e profissional.
-- Faça apenas uma pergunta por vez.
-- Não use emojis.
-- Não forneça opiniões médicas.
-- A Siligyn atua há mais de 25 anos em implantes mamários no estado de Goiás.
-- Portfólio principal: implantes Silimed, fita de cicatrização, Medgel Antiage.
-`;
 
 // Memória de sessões em RAM
 // Estrutura: { "<id>": { state: "...", data: { ... } } }
@@ -63,9 +50,67 @@ function formatDataCirurgia(text) {
   return text;
 }
 
+// Função para deixar a resposta mais humana usando OpenAI
+async function enhanceWithAI(baseReply, session) {
+  // Se não houver API key, devolve a mensagem base
+  if (!process.env.OPENAI_API_KEY) {
+    return baseReply;
+  }
+
+  try {
+    const sistema = `
+Você é MAYA da Siligyn, agente oficial de atendimento da Siligyn Produtos Médicos.
+
+Regras:
+- Fale sempre em português do Brasil.
+- Seja acolhedora, empática, clara, profissional e objetiva.
+- Mantenha SEMPRE apenas UMA pergunta por mensagem.
+- Não use emojis.
+- Não forneça opiniões médicas.
+- Não sugira tipo, volume, tamanho ou modelo de implante.
+- Não mude o sentido técnico da mensagem base, apenas a forma de falar.
+- Não invente informações, preços, promoções ou políticas que não estejam implícitas na mensagem base.
+- Use um tom próximo de uma atendente humana atenciosa, mas profissional.
+`;
+
+    const contexto = `
+Dados atuais da paciente (não cite literalmente, use apenas como contexto interno):
+${JSON.stringify(session?.data || {}, null, 2)}
+`;
+
+    const userPrompt = `
+Reescreva a mensagem abaixo de forma mais empática, acolhedora e natural, mantendo o mesmo sentido e apenas UMA pergunta no final. Não use emojis.
+
+Mensagem base:
+"${baseReply}"
+
+${contexto}
+`;
+
+    const completion = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: sistema },
+        { role: 'user', content: userPrompt },
+      ],
+      max_tokens: 400,
+      temperature: 0.4,
+    });
+
+    const reply =
+      completion.choices?.[0]?.message?.content?.trim() || baseReply;
+
+    return reply;
+  } catch (err) {
+    console.error('Erro ao chamar OpenAI para refinar resposta:', err);
+    // Em caso de erro na IA, devolve a mensagem base
+    return baseReply;
+  }
+}
+
 // Rota de teste (navegador)
 app.get('/', (req, res) => {
-  res.send('MAYA da Siligyn - Backend ativo com fluxo refinado.');
+  res.send('MAYA da Siligyn - Backend ativo com fluxo e IA empática.');
 });
 
 // Webhook principal (futuramente chamado pelo WhatsApp)
@@ -92,7 +137,7 @@ app.post('/webhook-whatsapp', async (req, res) => {
     }
 
     const session = sessions[sessionId];
-    let reply = '';
+    let baseReply = '';
 
     // =========================
     // FLUXO PRINCIPAL
@@ -101,11 +146,8 @@ app.post('/webhook-whatsapp', async (req, res) => {
     switch (session.state) {
       // 0) SAUDAÇÃO INICIAL
       case 'SAUDACAO':
-        reply =
-          'Olá! Eu sou a MAYA da Siligyn.\n' +
-          'Sou especializada em ajudar você com informações sobre nossos produtos.\n' +
-          'Há mais de 25 anos, a Siligyn apoia médicos e pacientes em Goiás com confiança, segurança e qualidade.\n' +
-          'Para eu te orientar da melhor forma, com qual produto posso te ajudar hoje?';
+        baseReply =
+          'Olá! Eu sou a MAYA da Siligyn. Sou especializada em ajudar você com informações sobre nossos produtos. Há mais de 25 anos, a Siligyn apoia médicos e pacientes em Goiás com confiança, segurança e qualidade. Para eu te orientar da melhor forma, com qual produto posso te ajudar hoje?';
         session.state = 'DETECTAR_INTENCAO';
         break;
 
@@ -127,24 +169,20 @@ app.post('/webhook-whatsapp', async (req, res) => {
 
         if (querImplante) {
           session.state = 'CONSULTA_IMPLANTE';
-          reply =
-            'Perfeito, vou te ajudar com os implantes Silimed.\n' +
-            'Só para eu entender em que momento você está: você já passou em consulta com o seu cirurgião plástico para essa cirurgia?';
+          baseReply =
+            'Entendi, você está buscando os implantes Silimed para a sua cirurgia. Só para eu entender em que momento você está nesse processo: você já passou em consulta com o seu cirurgião plástico para essa cirurgia?';
         } else if (querMedgel) {
           session.state = 'INTERESSE_MEDGEL';
-          reply =
-            'Entendi, você quer saber sobre o Medgel Antiage.\n' +
-            'Você já utiliza algum produto para prevenção de rugas ou cuidados diários com a pele do rosto?';
+          baseReply =
+            'Certo, você tem interesse no Medgel Antiage. Eu consigo te explicar como ele funciona e como pode te ajudar na rotina de cuidado com a pele. Antes disso, me conta: hoje você costuma usar algum produto para prevenção de rugas ou cuidados diários com a pele do rosto?';
         } else if (querFita) {
           session.state = 'INTERESSE_FITA';
-          reply =
-            'Entendi, você quer saber sobre a fita de cicatrização.\n' +
-            'Sua cirurgia já foi realizada ou ainda será realizada?';
+          baseReply =
+            'Perfeito, você quer saber mais sobre a fita de cicatrização. Ela é muito utilizada no pós-operatório para ajudar na qualidade estética da cicatriz. Me conta, por favor: a sua cirurgia já foi realizada ou ainda está programada para acontecer?';
         } else {
           session.state = 'INTERESSE_OUTROS';
-          reply =
-            'Perfeito. Trabalhamos com implantes mamários Silimed, fita de cicatrização, Medgel Antiage e outros produtos.\n' +
-            'Você pode me contar, com suas palavras, o que está buscando agora? Assim eu consigo direcionar melhor o atendimento.';
+          baseReply =
+            'Entendi, obrigada por compartilhar. Nós trabalhamos com implantes mamários Silimed, fita de cicatrização, Medgel Antiage e outros produtos de suporte cirúrgico. Para eu direcionar melhor o atendimento, você pode me contar com um pouco mais de detalhes o que está buscando agora?';
         }
         break;
       }
@@ -152,24 +190,16 @@ app.post('/webhook-whatsapp', async (req, res) => {
       // 2) VERIFICA SE JÁ PASSOU EM CONSULTA (IMPLANTES)
       case 'CONSULTA_IMPLANTE':
         if (isYes(msgLower)) {
-          // Já passou em consulta → inicia Etapa 1 explicando o porquê dos dados
           session.state = 'ETAPA1_CIRURGIA_NOME';
-          reply =
-            'Perfeito, isso ajuda muito.\n' +
-            'Agora vou precisar de alguns dados da sua cirurgia para agendar o seu atendimento no sistema.\n' +
-            'Os implantes serão entregues diretamente no centro cirúrgico, no nome do médico responsável e com o seu nome como paciente. Por isso, precisamos deixar tudo muito certinho para não haver erro.\n' +
-            'Para começarmos, qual é o nome do cirurgião plástico responsável pela sua cirurgia?';
+          baseReply =
+            'Perfeito, isso ajuda bastante. Agora vou precisar de alguns dados da sua cirurgia para agendar o seu atendimento no sistema. Os implantes serão entregues diretamente no centro cirúrgico, no nome do médico responsável pela cirurgia e com o seu nome como paciente. Por isso, precisamos deixar tudo muito certinho para não haver erro. Para começarmos, qual é o nome do cirurgião plástico responsável pela sua cirurgia?';
         } else if (isNo(msgLower)) {
-          // Ainda não passou em consulta
-          reply =
-            'Entendo, isso é bem comum.\n' +
-            'A compra dos implantes é feita sempre após a avaliação do cirurgião plástico, que define o que é mais indicado para você.\n' +
-            'Assim que você passar em consulta e o seu médico te orientar sobre os implantes Silimed, posso te ajudar com a organização da compra e das condições.\n' +
-            'Se quiser, posso te explicar um pouco mais sobre os implantes ou sobre o nosso processo.';
           session.state = 'FINALIZADO';
+          baseReply =
+            'Entendo, e isso é bem comum. A compra dos implantes é feita sempre após a avaliação do cirurgião plástico, que define o que é mais indicado para você. Assim que você passar em consulta e o seu médico te orientar sobre os implantes Silimed, posso te ajudar com toda a organização da compra e das condições. Enquanto isso, se você quiser, eu posso te explicar um pouco mais sobre os implantes ou sobre como funciona o processo com a Siligyn. Gostaria?';
         } else {
-          reply =
-            'Só para eu conseguir seguir direitinho: você já passou em consulta com o seu cirurgião plástico para essa cirurgia? Pode me responder com sim ou não.';
+          baseReply =
+            'Só para eu conseguir seguir direitinho e te ajudar da melhor forma: você já passou em consulta com o seu cirurgião plástico para essa cirurgia? Pode me responder com sim ou não?';
         }
         break;
 
@@ -179,17 +209,15 @@ app.post('/webhook-whatsapp', async (req, res) => {
       case 'ETAPA1_CIRURGIA_NOME':
         session.data.cirurgiao = userMessage;
         session.state = 'ETAPA1_CIRURGIA_DATA';
-        reply =
-          'Obrigada, registrei o nome do cirurgião.\n' +
-          'Se já tiver, me informe a data da cirurgia. Se ainda estiver definindo, pode me dizer que a data está em aberto que seguimos do mesmo jeito.';
+        baseReply =
+          'Obrigada, já registrei o nome do seu cirurgião. Se você já tiver a data da cirurgia definida, pode me informar agora. Se ainda estiver em definição, fique à vontade para me dizer que a data está em aberto que seguimos normalmente. Qual é a data da cirurgia ou se ela ainda está a definir?';
         break;
 
       case 'ETAPA1_CIRURGIA_DATA':
         session.data.dataCirurgia = userMessage;
         session.state = 'ETAPA1_CIRURGIA_LOCAL';
-        reply =
-          'Perfeito, anotei aqui.\n' +
-          'Em qual hospital ou clínica a cirurgia será realizada (ou está prevista para ser realizada)?';
+        baseReply =
+          'Certo, anotei a informação sobre a data da cirurgia. Agora preciso registrar em qual hospital ou clínica a sua cirurgia será realizada, ou está prevista para ser realizada. Você pode me informar o nome do hospital ou da clínica?';
         break;
 
       case 'ETAPA1_CIRURGIA_LOCAL':
@@ -198,30 +226,26 @@ app.post('/webhook-whatsapp', async (req, res) => {
 
         const dataFormatada = formatDataCirurgia(session.data.dataCirurgia);
 
-        reply =
-          'Só para garantir que o agendamento e a entrega dos implantes no centro cirúrgico fiquem corretos, vou recapitular os dados da cirurgia:\n' +
+        baseReply =
+          'Para garantir que o agendamento e a entrega dos implantes no centro cirúrgico fiquem corretos, vou recapitular os dados da cirurgia que registrei até aqui:\n' +
           `Cirurgião: ${session.data.cirurgiao}\n` +
           `Data da cirurgia: ${dataFormatada}\n` +
           `Hospital/Clínica: ${session.data.localCirurgia}\n` +
-          'Essas informações estão corretas?';
+          'Quero ter certeza de que está tudo certinho. Essas informações estão corretas?';
         break;
 
       case 'ETAPA1_CONFIRMAR':
         if (isYes(msgLower)) {
           session.state = 'ETAPA2_DADOS_NOME';
-          reply =
-            'Ótimo, obrigado pela confirmação.\n' +
-            'Agora vou precisar dos seus dados pessoais para a emissão da nota fiscal.\n' +
-            'A nota fiscal é emitida após o procedimento cirúrgico, com as informações dos implantes que foram utilizados em você. Por isso, pedimos até 2 dias úteis após a cirurgia para emissão, e ela será enviada automaticamente para o e-mail que você informar.\n' +
-            'Vamos começar: qual é o seu nome completo?';
+          baseReply =
+            'Ótimo, obrigada por conferir comigo. Agora vou precisar dos seus dados pessoais para a emissão da nota fiscal. A nota fiscal é emitida após o procedimento cirúrgico, com as informações dos implantes que foram utilizados em você. Por isso, pedimos até dois dias úteis após a cirurgia para emissão, e ela será enviada automaticamente para o e-mail que você informar. Para começarmos essa parte, você pode me informar o seu nome completo?';
         } else if (isNo(msgLower)) {
           session.state = 'ETAPA1_CIRURGIA_NOME';
-          reply =
-            'Sem problema, vamos ajustar com calma.\n' +
-            'Vou refazer os dados da cirurgia desde o início para garantir que tudo fique correto.\n' +
-            'Qual é o nome do cirurgião plástico responsável pela sua cirurgia?';
+          baseReply =
+            'Sem problema, é muito importante que esses dados estejam corretos. Vamos ajustar com calma. Vou refazer os dados da cirurgia desde o início. Você pode me informar novamente o nome do cirurgião plástico responsável pela sua cirurgia?';
         } else {
-          reply = 'As informações da cirurgia estão corretas? Você pode me responder com sim ou não.';
+          baseReply =
+            'Só para eu conseguir seguir corretamente: as informações da cirurgia que te passei estão corretas? Você pode me responder com sim ou não?';
         }
         break;
 
@@ -231,54 +255,48 @@ app.post('/webhook-whatsapp', async (req, res) => {
       case 'ETAPA2_DADOS_NOME':
         session.data.nomePaciente = userMessage;
         session.state = 'ETAPA2_DADOS_CPF';
-        reply =
-          'Obrigada, registrei seu nome completo.\n' +
-          'Qual é o seu CPF?';
+        baseReply =
+          'Obrigada, já registrei o seu nome completo. Agora, para seguir com o cadastro para emissão da nota fiscal, você pode me informar o seu CPF?';
         break;
 
       case 'ETAPA2_DADOS_CPF':
         session.data.cpfPaciente = userMessage;
         session.state = 'ETAPA2_DADOS_ENDERECO';
-        reply =
-          'Perfeito.\n' +
-          'Agora, por favor, me informe o seu endereço completo, incluindo rua, número, complemento (se houver), bairro, cidade e, se souber, o CEP.';
+        baseReply =
+          'Perfeito, CPF registrado. Agora preciso do seu endereço completo, incluindo rua, número, complemento se houver, bairro, cidade e, se você souber, o CEP. Você pode me passar essas informações?';
         break;
 
       case 'ETAPA2_DADOS_ENDERECO':
         session.data.enderecoPaciente = userMessage;
         session.state = 'ETAPA2_DADOS_EMAIL';
-        reply =
-          'Certo, registrei o endereço.\n' +
-          'Para finalizar essa parte, qual é o seu e-mail? É nele que você receberá a nota fiscal após o procedimento.';
+        baseReply =
+          'Certo, já registrei o seu endereço. Para finalizar essa etapa, preciso do e-mail em que você deseja receber a nota fiscal após a cirurgia. Qual é o seu e-mail?';
         break;
 
       case 'ETAPA2_DADOS_EMAIL':
         session.data.emailPaciente = userMessage;
         session.state = 'ETAPA2_CONFIRMAR';
-        reply =
-          'Vou recapitular seus dados pessoais para garantir que a nota fiscal seja emitida corretamente:\n' +
+        baseReply =
+          'Vou recapitular os seus dados pessoais para garantir que a nota fiscal seja emitida corretamente:\n' +
           `Nome: ${session.data.nomePaciente}\n` +
           `CPF: ${session.data.cpfPaciente}\n` +
           `Endereço: ${session.data.enderecoPaciente}\n` +
           `E-mail: ${session.data.emailPaciente}\n` +
-          'Essas informações estão corretas?';
+          'Quero ter certeza de que está tudo correto. Essas informações estão certas?';
         break;
 
       case 'ETAPA2_CONFIRMAR':
         if (isYes(msgLower)) {
           session.state = 'ETAPA3_INDICACAO';
-          reply =
-            'Perfeito, obrigada por conferir com atenção.\n' +
-            'Agora, para finalizar a qualificação, preciso registrar a indicação do seu cirurgião.\n' +
-            'A sua médica(o) informou qual modelo ou revestimento do implante Silimed que será utilizado? Se puder, me diga o que ele(a) te orientou.';
+          baseReply =
+            'Perfeito, obrigada por conferir com atenção. Agora, para finalizar a qualificação, preciso registrar a indicação do seu cirurgião. A sua médica ou o seu médico te informou qual modelo ou revestimento do implante Silimed será utilizado? Se puder, me conte com as suas palavras o que ele ou ela orientou.';
         } else if (isNo(msgLower)) {
           session.state = 'ETAPA2_DADOS_NOME';
-          reply =
-            'Sem problema, vamos ajustar com calma.\n' +
-            'Vou começar novamente pelos seus dados pessoais.\n' +
-            'Qual é o seu nome completo?';
+          baseReply =
+            'Tudo bem, é importante que esses dados estejam corretos para a emissão da nota fiscal. Vamos ajustar juntos. Vou começar novamente pelos seus dados pessoais. Você pode me informar de novo o seu nome completo?';
         } else {
-          reply = 'Essas informações pessoais estão corretas? Você pode me responder com sim ou não.';
+          baseReply =
+            'Só para eu confirmar direitinho: essas informações pessoais que recapitulei estão corretas? Você pode me responder com sim ou não?';
         }
         break;
 
@@ -288,26 +306,24 @@ app.post('/webhook-whatsapp', async (req, res) => {
       case 'ETAPA3_INDICACAO':
         session.data.indicacaoMedica = userMessage;
         session.state = 'ETAPA3_CONFIRMAR';
-        reply =
-          'Só confirmando a indicação que você recebeu do seu cirurgião:\n' +
+        baseReply =
+          'Para garantir que eu registrei corretamente, vou repetir a indicação que você me passou do seu cirurgião:\n' +
           `${session.data.indicacaoMedica}\n` +
-          'Está correto?';
+          'Quero ter certeza de que está exatamente como foi orientado. Essa informação está correta?';
         break;
 
       case 'ETAPA3_CONFIRMAR':
         if (isYes(msgLower)) {
           session.state = 'AGUARDANDO_VALIDACAO';
-          reply =
-            'Perfeito, registrei todas as informações da cirurgia, seus dados pessoais e a indicação do implante.\n' +
-            'Agora vou aguardar uma validação interna do sistema para garantirmos que está tudo alinhado antes de seguir para a forma de pagamento.\n' +
-            'Assim que estiver tudo confirmado, eu volto a falar com você daqui para frente.';
+          baseReply =
+            'Perfeito, registrei os dados da cirurgia, os seus dados pessoais e a indicação do implante conforme orientação do seu cirurgião. Agora, vou aguardar uma validação interna para garantirmos que está tudo alinhado antes de seguir para a parte de forma de pagamento. Assim que essa validação estiver concluída, eu retomo o contato com você para combinarmos os próximos passos. Tudo bem para você?';
         } else if (isNo(msgLower)) {
           session.state = 'ETAPA3_INDICACAO';
-          reply =
-            'Sem problema, vamos ajustar a indicação com calma.\n' +
-            'Pode me informar novamente o que o seu cirurgião orientou em relação ao implante Silimed?';
+          baseReply =
+            'Sem problema, vamos ajustar essa informação com calma. Você pode me informar novamente o que o seu cirurgião orientou em relação ao implante Silimed?';
         } else {
-          reply = 'A indicação que registrei está correta? Você pode me responder com sim ou não.';
+          baseReply =
+            'Só para eu ter certeza: a indicação que eu repeti para você está correta? Você pode me responder com sim ou não?';
         }
         break;
 
@@ -315,49 +331,40 @@ app.post('/webhook-whatsapp', async (req, res) => {
       // ESTADO APÓS ETAPAS (Aguardando validação humana)
       // =========================
       case 'AGUARDANDO_VALIDACAO':
-        reply =
-          'Já registrei todas as suas informações e estou aguardando apenas uma validação interna.\n' +
-          'Assim que estiver tudo confirmado, sigo com você para combinarmos a forma de pagamento e os próximos passos.';
+        baseReply =
+          'Todas as informações importantes sobre a sua cirurgia e os implantes já foram registradas. Agora estou aguardando apenas uma validação interna para confirmar que está tudo certo. Assim que essa etapa estiver concluída, eu volto a falar com você para combinarmos a forma de pagamento e seguir com a organização da sua compra. Posso continuar te acompanhando por aqui assim que essa validação for concluída?';
         break;
 
       // =========================
       // FLUXOS SECUNDÁRIOS (MEDGEL, FITA, OUTROS)
       // =========================
       case 'INTERESSE_MEDGEL':
-        reply =
-          'O Medgel Antiage é indicado para prevenção e melhora de linhas finas e textura da pele do rosto.\n' +
-          'Você busca mais prevenção ou já percebe algumas linhas e deseja suavizá-las?';
+        baseReply =
+          'O Medgel Antiage é indicado para prevenção e melhora de linhas finas e da textura da pele do rosto. Ele costuma ser usado como parte de uma rotina de cuidados para quem quer prevenir o envelhecimento ou suavizar sinais que já aparecem. Pensando em você hoje, você está mais focada em prevenção ou em suavizar linhas que já percebeu?';
         session.state = 'INTERESSE_MEDGEL_DETALHE';
         break;
 
       case 'INTERESSE_MEDGEL_DETALHE':
-        reply =
-          'Entendi, obrigada por compartilhar.\n' +
-          'O Medgel Antiage atua exatamente nesse tipo de necessidade, ajudando na qualidade da pele.\n' +
-          'Se você quiser, posso te explicar como utilizar e depois te passar as condições de compra.';
+        baseReply =
+          'Entendi, obrigada por compartilhar comigo. O Medgel Antiage atua justamente nesse tipo de necessidade, ajudando na qualidade da pele ao longo do uso contínuo. Se você quiser, eu posso te explicar em mais detalhes como ele é aplicado e, em seguida, te passar as condições de compra para que você avalie com calma. Você gostaria que eu te explicasse melhor o modo de uso agora?';
         session.state = 'FINALIZADO';
         break;
 
       case 'INTERESSE_FITA':
-        reply =
-          'A fita de cicatrização é utilizada no pós-operatório para ajudar na qualidade estética da cicatriz.\n' +
-          'Sua cirurgia já tem data marcada ou você ainda está planejando?';
+        baseReply =
+          'A fita de cicatrização é utilizada no pós-operatório para contribuir com a qualidade estética da cicatriz ao longo do tempo. Ela costuma ser introduzida após a fase inicial de curativos, sempre conforme a orientação do seu cirurgião. Me conta: a sua cirurgia já tem data marcada ou você ainda está na fase de planejamento?';
         session.state = 'INTERESSE_FITA_DETALHE';
         break;
 
       case 'INTERESSE_FITA_DETALHE':
-        reply =
-          'Perfeito, obrigada por me contar.\n' +
-          'A fita costuma ser utilizada após a fase inicial de curativos, seguindo a orientação do seu cirurgião.\n' +
-          'Se você quiser, posso te orientar sobre como adquirir a fita conosco.';
+        baseReply =
+          'Perfeito, obrigada por me contar em que momento você está. A fita de cicatrização entra como um cuidado complementar, depois da liberação médica, para ajudar no resultado final da cicatriz. Se você quiser, posso te orientar sobre como adquirir a fita conosco e quais são as opções disponíveis. Você gostaria que eu te explicasse como funciona a compra da fita?';
         session.state = 'FINALIZADO';
         break;
 
       case 'INTERESSE_OUTROS':
-        reply =
-          'Certo, recebi o que você me contou.\n' +
-          'Trabalhamos com implantes Silimed, fita de cicatrização, Medgel Antiage e outros produtos para suporte cirúrgico.\n' +
-          'Se puder detalhar um pouco mais o que você precisa, eu direciono melhor o atendimento.';
+        baseReply =
+          'Certo, entendi o que você trouxe. Nós trabalhamos com implantes Silimed, fita de cicatrização, Medgel Antiage e outros produtos que dão suporte ao procedimento cirúrgico e ao pós-operatório. Se você puder detalhar um pouco mais o que está buscando ou qual é a sua maior dúvida neste momento, eu consigo direcionar o atendimento da forma mais adequada para o que você precisa. O que você sente que é mais importante esclarecer agora?';
         session.state = 'FINALIZADO';
         break;
 
@@ -366,13 +373,13 @@ app.post('/webhook-whatsapp', async (req, res) => {
       // =========================
       case 'FINALIZADO':
       default:
-        reply =
-          'Certo, recebi a sua mensagem.\n' +
-          'Se você quiser, posso retomar o atendimento focando em implantes, Medgel Antiage, fita de cicatrização ou outro produto específico. É só me dizer com o que deseja seguir.';
+        baseReply =
+          'Certo, recebi a sua mensagem. Se você quiser, posso retomar o atendimento focando em implantes mamários, no Medgel Antiage, na fita de cicatrização ou em outro produto específico do nosso portfólio. Com qual desses assuntos você prefere que eu te ajude agora?';
         session.state = 'DETECTAR_INTENCAO';
         break;
     }
 
+    const reply = await enhanceWithAI(baseReply, session);
     return res.json({ reply });
   } catch (error) {
     console.error('Erro no webhook:', error);
