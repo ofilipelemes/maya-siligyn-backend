@@ -106,12 +106,15 @@ app.get('/admin', (req, res) => {
         a.button {
           display: inline-block;
           padding: 6px 12px;
-          margin-top: 4px;
+          margin: 2px;
           background-color: #ff8800;
           color: #fff;
           text-decoration: none;
           border-radius: 4px;
           font-size: 13px;
+        }
+        a.button.secondary {
+          background-color: #555555;
         }
       </style>
     </head>
@@ -131,7 +134,7 @@ app.get('/admin', (req, res) => {
           <th>Data</th>
           <th>Local</th>
           <th>Indicação</th>
-          <th>Ação</th>
+          <th>Ações</th>
         </tr>
     `;
     for (const [sessionId, sess] of pendentes) {
@@ -148,6 +151,9 @@ app.get('/admin', (req, res) => {
             <a class="button" href="/admin/validar?sessionId=${encodeURIComponent(
               sessionId
             )}">Validar e liberar pagamento</a>
+            <a class="button secondary" href="/admin/reabrir?sessionId=${encodeURIComponent(
+              sessionId
+            )}">Reabrir para correção</a>
           </td>
         </tr>
       `;
@@ -163,7 +169,7 @@ app.get('/admin', (req, res) => {
   res.send(html);
 });
 
-// AÇÃO DO BOTÃO DE VALIDAÇÃO NO PAINEL
+// AÇÃO: validar e liberar pagamento
 app.get('/admin/validar', (req, res) => {
   const sessionId = req.query.sessionId;
   if (!sessionId || !sessions[sessionId]) {
@@ -174,8 +180,19 @@ app.get('/admin/validar', (req, res) => {
   res.redirect('/admin');
 });
 
-// NOVA ROTA: CRIAR LEAD DE TESTE
-// Exemplo: https://maya-siligyn-backend.onrender.com/criar-teste?sessionId=TESTE_MAYA
+// AÇÃO: reabrir para correção (volta para o início do fluxo de cirurgia)
+app.get('/admin/reabrir', (req, res) => {
+  const sessionId = req.query.sessionId;
+  if (!sessionId || !sessions[sessionId]) {
+    return res.status(404).send('Sessão não encontrada para reabertura.');
+  }
+  sessions[sessionId].state = 'ETAPA1_CIRURGIA_NOME';
+  console.log('*** SESSÃO REABERTA PARA CORREÇÃO ***', sessionId);
+  res.redirect('/admin');
+});
+
+// ROTA PARA CRIAR LEAD DE TESTE
+// Exemplo: /criar-teste?sessionId=TESTE_MAYA
 app.get('/criar-teste', (req, res) => {
   const sessionId = req.query.sessionId || 'TESTE_MAYA';
   sessions[sessionId] = {
@@ -192,7 +209,7 @@ app.get('/criar-teste', (req, res) => {
     },
   };
   console.log('*** LEAD DE TESTE CRIADO ***', sessionId);
-  res.send(`Lead de teste criado: ${sessionId}. Agora acesse /admin para validar.`);
+  res.send(`Lead de teste criado: ${sessionId}. Agora acesse /admin para validar ou reabrir.`);
 });
 
 // ================================
