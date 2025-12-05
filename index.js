@@ -9,11 +9,9 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Sessões em memória
-// Estrutura: { sessionId: { state: '...', data: { ... } } }
+// Sessões em memória: { sessionId: { state: '...', data: { ... } } }
 const sessions = {};
 
-// Identificador de sessão (depois será o número do WhatsApp)
 function getSessionId(req) {
   return req.body.from || req.body.phone || req.body.sessionId || 'sessao-desconhecida';
 }
@@ -42,32 +40,29 @@ function formatDataCirurgia(text) {
   return text;
 }
 
-// Deixa a resposta mais humana usando OpenAI (sem mudar o sentido)
+// IA para deixar a mensagem mais humana (sem mudar o sentido)
 async function enhance(baseReply) {
   if (!process.env.OPENAI_API_KEY) return baseReply;
-
   try {
     const sistema = `
 Você é MAYA da Siligyn.
-Seu papel é reformular mensagens para atendimento humano, acolhedor, claro e profissional.
+Reescreve mensagens de forma humana, acolhedora e profissional.
 
-REGRAS:
+Regras:
 - Português do Brasil.
 - Sem emojis.
 - Apenas UMA pergunta por mensagem.
-- Não invente informações novas.
-- Não mude o sentido, apenas a forma de falar.
+- Não invente informações.
+- Não mude o sentido, só a forma.
 - Não sugira tipo, modelo ou tamanho de implante.
 - Não dê opinião médica.
 `;
-
     const userPrompt = `
 Reescreva a mensagem abaixo de forma acolhedora, natural e profissional, mantendo o conteúdo e deixando apenas UMA pergunta no final.
 
 Mensagem base:
 "${baseReply}"
 `;
-
     const completion = await client.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -77,7 +72,6 @@ Mensagem base:
       temperature: 0.4,
       max_tokens: 400,
     });
-
     return completion.choices[0].message.content.trim();
   } catch (err) {
     console.error('Erro ao refinar com OpenAI:', err);
@@ -92,38 +86,37 @@ app.get('/', (req, res) => {
   res.send('MAYA da Siligyn — Backend ativo com painel de validação humana.');
 });
 
-// Painel simples de validação em /admin
+// PAINEL DE VALIDAÇÃO
 app.get('/admin', (req, res) => {
-  // Lista sessões em AGUARDANDO_VALIDACAO
   const pendentes = Object.entries(sessions).filter(
     ([_, s]) => s.state === 'AGUARDANDO_VALIDACAO'
   );
 
   let html = `
-    <html>
-      <head>
-        <title>Painel de Validação - MAYA Siligyn</title>
-        <meta charset="utf-8" />
-        <style>
-          body { font-family: Arial, sans-serif; margin: 20px; }
-          h1 { font-size: 22px; }
-          table { border-collapse: collapse; width: 100%; margin-top: 16px; }
-          th, td { border: 1px solid #ccc; padding: 8px; text-align: left; font-size: 14px; }
-          th { background-color: #f5f5f5; }
-          a.button {
-            display: inline-block;
-            padding: 6px 12px;
-            margin-top: 4px;
-            background-color: #ff8800;
-            color: #fff;
-            text-decoration: none;
-            border-radius: 4px;
-            font-size: 13px;
-          }
-        </style>
-      </head>
-      <body>
-        <h1>Pacientes aguardando validação</h1>
+  <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>Painel de Validação - MAYA Siligyn</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { font-size: 22px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 16px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; font-size: 14px; }
+        th { background-color: #f5f5f5; }
+        a.button {
+          display: inline-block;
+          padding: 6px 12px;
+          margin-top: 4px;
+          background-color: #ff8800;
+          color: #fff;
+          text-decoration: none;
+          border-radius: 4px;
+          font-size: 13px;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>Pacientes aguardando validação</h1>
   `;
 
   if (pendentes.length === 0) {
@@ -133,7 +126,7 @@ app.get('/admin', (req, res) => {
       <table>
         <tr>
           <th>SessionId</th>
-          <th>Nome da paciente</th>
+          <th>Nome</th>
           <th>Cirurgião</th>
           <th>Data</th>
           <th>Local</th>
@@ -141,7 +134,6 @@ app.get('/admin', (req, res) => {
           <th>Ação</th>
         </tr>
     `;
-
     for (const [sessionId, sess] of pendentes) {
       const d = sess.data || {};
       html += `
@@ -160,33 +152,47 @@ app.get('/admin', (req, res) => {
         </tr>
       `;
     }
-
     html += `</table>`;
   }
 
   html += `
-      </body>
-    </html>
+    </body>
+  </html>
   `;
 
   res.send(html);
 });
 
-// Ação do botão "Validar e liberar pagamento" no painel
+// AÇÃO DO BOTÃO DE VALIDAÇÃO NO PAINEL
 app.get('/admin/validar', (req, res) => {
   const sessionId = req.query.sessionId;
-
   if (!sessionId || !sessions[sessionId]) {
     return res.status(404).send('Sessão não encontrada para validação.');
   }
-
   sessions[sessionId].state = 'LIBERADO_PAGAMENTO';
-
-  console.log('*** SESSÃO VALIDADA PELO PAINEL ***');
-  console.log('SessionId:', sessionId);
-  console.log('Dados da sessão:', JSON.stringify(sessions[sessionId].data, null, 2));
-
+  console.log('*** SESSÃO VALIDADA PELO PAINEL ***', sessionId);
   res.redirect('/admin');
+});
+
+// NOVA ROTA: CRIAR LEAD DE TESTE
+// Exemplo: https://maya-siligyn-backend.onrender.com/criar-teste?sessionId=TESTE_MAYA
+app.get('/criar-teste', (req, res) => {
+  const sessionId = req.query.sessionId || 'TESTE_MAYA';
+  sessions[sessionId] = {
+    state: 'AGUARDANDO_VALIDACAO',
+    data: {
+      cirurgiao: 'Dr. Teste Cirurgião',
+      dataCirurgia: 'A definir',
+      localCirurgia: 'Hospital de Teste',
+      indicacaoMedica: 'Implantes de poliuretano',
+      nomePaciente: 'Paciente de Teste',
+      cpfPaciente: '00000000000',
+      enderecoPaciente: 'Rua Exemplo, 123, Centro, Goiânia',
+      emailPaciente: 'teste@siligyn.com.br',
+    },
+  };
+  console.log('*** LEAD DE TESTE CRIADO ***', sessionId);
+  res.send(`Lead de teste criado: ${sessionId}. Agora acesse /admin para validar.`);
 });
 
 // ================================
@@ -199,10 +205,7 @@ app.post('/webhook-whatsapp', async (req, res) => {
     const sessionId = getSessionId(req);
 
     if (!sessions[sessionId]) {
-      sessions[sessionId] = {
-        state: 'SAUDACAO',
-        data: {}
-      };
+      sessions[sessionId] = { state: 'SAUDACAO', data: {} };
     }
 
     const session = sessions[sessionId];
@@ -215,7 +218,6 @@ app.post('/webhook-whatsapp', async (req, res) => {
     }
 
     switch (session.state) {
-      // 0 — Saudação inicial
       case 'SAUDACAO':
         baseReply =
           'Olá! Eu sou a MAYA da Siligyn. É um prazer falar com você. A Siligyn atua há mais de 25 anos acompanhando médicos e pacientes em Goiás com segurança e qualidade. Para eu te orientar da melhor forma, você poderia me dizer com qual produto deseja ajuda hoje?';
@@ -312,7 +314,6 @@ app.post('/webhook-whatsapp', async (req, res) => {
       case 'ETAPA3_DADOS_EMAIL':
         session.data.emailPaciente = msg;
         session.state = 'CONFIRMACAO_FINAL';
-
         baseReply =
           'Antes de seguir para a próxima etapa, vou te apresentar um resumo de tudo que registrei para garantir que está correto:\n\n' +
           `• Cirurgião: ${session.data.cirurgiao}\n` +
@@ -326,15 +327,10 @@ app.post('/webhook-whatsapp', async (req, res) => {
           'Essas informações estão todas corretas?';
         break;
 
-      // CONFIRMAÇÃO ÚNICA
       case 'CONFIRMACAO_FINAL':
         if (isYes(msgLower)) {
           session.state = 'AGUARDANDO_VALIDACAO';
-
-          console.log('*** LEAD AGUARDANDO VALIDAÇÃO ***');
-          console.log('SessionId:', sessionId);
-          console.log('Dados da sessão:', JSON.stringify(session.data, null, 2));
-
+          console.log('*** LEAD AGUARDANDO VALIDAÇÃO ***', sessionId);
           baseReply =
             'Perfeito, obrigada por confirmar. Todas as informações do seu atendimento foram registradas no sistema. Agora vou aguardar uma validação interna antes de seguirmos para a etapa de pagamento. Assim que essa validação estiver concluída, continuamos daqui.';
         } else if (isNo(msgLower)) {
@@ -347,19 +343,16 @@ app.post('/webhook-whatsapp', async (req, res) => {
         }
         break;
 
-      // AGUARDANDO VALIDAÇÃO HUMANA
       case 'AGUARDANDO_VALIDACAO':
         baseReply =
           'Todas as suas informações já estão registradas e agora estou aguardando uma validação interna. Assim que essa validação for concluída, poderemos seguir com a etapa de pagamento. Por enquanto, não preciso de novos dados seus.';
         break;
 
-      // LIBERADO PARA PAGAMENTO (após validação pelo painel)
       case 'LIBERADO_PAGAMENTO':
         baseReply =
           'A validação interna já foi concluída. Agora podemos seguir para a etapa de pagamento e finalização da sua compra de implantes. Você prefere pagamento à vista ou parcelado?';
         break;
 
-      // Fluxo genérico para outros produtos (placeholder)
       case 'INTERESSE_OUTROS':
         baseReply =
           'Certo, entendi. Trabalhamos com implantes mamários Silimed e outros produtos relacionados ao procedimento cirúrgico. Se você puder detalhar um pouco mais o que precisa, eu direciono o atendimento da melhor forma.';
